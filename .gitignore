@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# Runtime data (SQLite)
+server/data/*.db
+server/data/*.db-shm
+server/data/*.db-wal
+
+# Generated artifacts
+server/screenshots/
+server/games/*
+!server/games/.gitkeep
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
