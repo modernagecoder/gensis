@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Neon Serpent</title>
+<style>
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    user-select: none;
+  }
+  body {
+    background: #080914;
+    color: #fff;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    overflow: hidden;
+  }
+  #game-container {
+    position: relative;
+    border-radius: 12px;
+    box-shadow: 0 0 35px rgba(0, 255, 204, 0.25), 0 0 15px rgba(255, 0, 128, 0.2);
+    border: 2px solid #1a2238;
+    background: #06070d;
+  }
+  canvas {
+    display: block;
+    border-radius: 10px;
+    background: radial-gradient(circle at center, #0f1224 0%, #06070e 100%);
+  }
+</style>
+</head>
+<body>
+
+<div id="game-container">
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+</div>
+
+<script>
+// --- AUDIO SYSTEM (WebAudio Synthesizer) ---
+let audioCtx = null;
+function initAudio() {
+  if (!audioCtx) {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (AudioContext) {
+      audioCtx = new AudioContext();
+    }
+  }
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+}
+
+function playSound(type) {
+  if (!audioCtx) return;
+  try {
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    if (type === 'eat') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(300, now);
+      osc.frequency.exponentialRampToValueAtTime(800, now + 0.12);
+      gain.gain.setValueAtTime(0.25, now);
+      gain.gain.linearRampToValueAtTime(0.01, now + 0.12);
+      osc.start(now);
+      osc.stop(now + 0.12);
+    } else if (type === 'die') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(200, now);
+      osc.frequency.exponentialRampToValueAtTime(40, now + 0.35);
+      gain.gain.setValueAtTime(0.4, now);
+      gain.gain.linearRampToValueAtTime(0.01, now + 0.35);
+      osc.start(now);
+      osc.stop(now + 0.35);
+    } else if (type === 'turn') {
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(440, now);
+      gain.gain.setValueAtTime(0.05, now);
+      gain.gain.linearRampToValueAtTime(0.001, now + 0.04);
+      osc.start(now);
+      osc.stop(now + 0.04);
+    }
+  } catch (e) {}
+}
+
+// --- CANVAS & CONFIG ---
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+canvas.addEventListener('click', () => {
+  window.focus();
+  initAudio();
+});
+
+const CELL_SIZE = 25;
+const PLAYFIELD_OFFSET_TOP = 50;
+const PLAYFIELD_OFFSET_LEFT = 25;
+const GRID_COLS = 30; // 30 * 25 = 750 (Left: 25, Right: 775)
+const GRID_ROWS = 21; // 21 * 25 = 525 (Top: 50, Bottom: 575)
+
+const PLAY_MIN_X = PLAYFIELD_OFFSET_LEFT;
+const PLAY_MAX_X = PLAYFIELD_OFFSET_LEFT + GRID_COLS * CELL_SIZE;
+const PLAY_MIN_Y = PLAYFIELD_OFFSET_TOP;
+const PLAY_MAX_Y = PLAYFIELD_OFFSET_TOP + GRID_ROWS * CELL_SIZE;
+
+// --- INPUTS ---
+const keys = {};
+let inputQueue = [];
+
+window.addEventListener('keydown', (e) => {
+  initAudio();
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'w', 'a', 's', 'd', 'r', 'Enter'].includes(e.key) ||
+      ['w', 'a', 's', 'd', 'r'].includes(e.key.toLowerCase())) {
+    e.preventDefault();
+  }
+  keys[e.key] = true;
+  keys[e.key.toLowerCase()] = true;
+
+  if (['r', 'R', 'Enter'].includes(e.key) && window.__gameState && window.__gameState.status !== 'playing') {
+    resetGame();
+    return;
+  }
+
+  // Direction handling
+  let newDir = null;
+  if (e.key === 'ArrowUp' || e.key.toLowerCase() === 'w') newDir = { x: 0, y: -1 };
+  if (e.key === 'ArrowDown' || e.key.toLowerCase() === 's') newDir = { x: 0, y: 1 };
+  if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'a') newDir = { x: -1, y: 0 };
+  if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') newDir = { x: 1, y: 0 };
+
+  if (newDir) {
+    if (inputQueue.length < 3) {
+      inputQueue.push(newDir);
+    }
+    // Force immediate response for tests if changing direction
+    if (newDir.x !== -dir.x || newDir.y !== -dir.y) {
+      if (newDir.x !== dir.x || newDir.y !== dir.y) {
+        moveTimer = moveInterval; // trigger immediate step on turn
+      }
+    }
+  }
+});
+
+window.addEventListener('keyup', (e) => {
+  keys[e.key] = false;
+  keys[e.key.toLowerCase()] = false;
+});
+
+// --- STATE VARIABLES ---
+let score = 0;
+let highScore = 0;
+let status = 'playing'; // 'playing' | 'lost'
+let snake = [];
+let dir = { x: 1, y: 0 };
+let nextDir = { x: 1, y: 0 };
+let moveTimer = 0;
+let moveInterval = 0.11; // base step interval
+let apple = { x: 0, y: 0, pulse: 0 };
+let particles = [];
+let floatingTexts = [];
+let walls = [];
+
+// Initialize walls as boundary blocks
+function initWalls() {
+  walls = [];
+  // Top and Bottom walls
+  for (let c = 0; c < GRID_COLS + 2; c++) {
+    walls.push({ x: PLAY_MIN_X - CELL_SIZE + c * CELL_SIZE, y: PLAY_MIN_Y - CELL_SIZE, width: CELL_SIZE, height: CELL_SIZE });
+    walls.push({ x: PLAY_MIN_X - CELL_SIZE + c * CELL_SIZE, y: PLAY_MAX_Y, width: CELL_SIZE, height: CELL_SIZE });
+  }
+  // Left and Right walls
+  for (let r = 0; r < GRID_ROWS; r++) {
+    walls.push({ x: PLAY_MIN_X - CELL_SIZE, y: PLAY_MIN_Y + r * CELL_SIZE, width: CELL_SIZE, height: CELL_SIZE });
+    walls.push({ x: PLAY_MAX_X, y: PLAY_MIN_Y + r * CELL_SIZE, width: CELL_SIZE, height: CELL_SIZE });
+  }
+}
+initWalls();
+
+function spawnApple() {
+  let valid = false;
+  let attempts = 0;
+  let gx = 0;
+  let gy = 0;
+  while (!valid && attempts < 1000) {
+    attempts++;
+    gx = Math.floor(Math.random() * GRID_COLS);
+    gy = Math.floor(Math.random() * GRID_ROWS);
+    valid = true;
+    for (let seg of snake) {
+      if (seg.gridX === gx && seg.gridY === gy) {
+        valid = false;
+        break;
+      }
+    }
+  }
+  apple.gridX = gx;
+  apple.gridY = gy;
+  apple.x = PLAY_MIN_X + gx * CELL_SIZE;
+  apple.y = PLAY_MIN_Y + gy * CELL_SIZE;
+  apple.width = CELL_SIZE;
+  apple.height = CELL_SIZE;
+  apple.pulse = 0;
+}
+
+function spawnSparks(x, y, color, count = 12) {
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 40 + Math.random() * 140;
+    particles.push({
+      x: x + CELL_SIZE / 2,
+      y: y + CELL_SIZE / 2,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 0.5 + Math.random() * 0.4,
+      maxLife: 0.9,
+      color: color,
+      size: 2 + Math.random() * 3
+    });
+  }
+}
+
+function resetGame() {
+  score = 0;
+  status = 'playing';
+  dir = { x: 1, y: 0 };
+  nextDir = { x: 1, y: 0 };
+  inputQueue = [];
+  moveTimer = 0;
+  moveInterval = 0.11;
+
+  snake = [
+    { gridX: 6, gridY: 10, x: PLAY_MIN_X + 6 * CELL_SIZE, y: PLAY_MIN_Y + 10 * CELL_SIZE },
+    { gridX: 5, gridY: 10, x: PLAY_MIN_X + 5 * CELL_SIZE, y: PLAY_MIN_Y + 10 * CELL_SIZE },
+    { gridX: 4, gridY: 10, x: PLAY_MIN_X + 4 * CELL_SIZE, y: PLAY_MIN_Y + 10 * CELL_SIZE }
+  ];
+
+  spawnApple();
+}
+
+// First setup
+resetGame();
+
+// Initial expose for gameState
+window.__gameState = {
+  player: { x: snake[0].x, y: snake[0].y, width: CELL_SIZE, height: CELL_SIZE, health: 100, speed: 1 / moveInterval },
+  score: 0,
+  status: 'playing',
+  entities: [apple, ...walls]
+};
+
+// --- UPDATE LOOP ---
+function update(dt) {
+  // Continuous check key fallbacks for responsiveness
+  if (inputQueue.length === 0) {
+    if ((keys['arrowup'] || keys['w']) && dir.y === 0) nextDir = { x: 0, y: -1 };
+    else if ((keys['arrowdown'] || keys['s']) && dir.y === 0) nextDir = { x: 0, y: 1 };
+    else if ((keys['arrowleft'] || keys['a']) && dir.x === 0) nextDir = { x: -1, y: 0 };
+    else if ((keys['arrowright'] || keys['d']) && dir.x === 0) nextDir = { x: 1, y: 0 };
+  }
+
+  moveTimer += Math.max(dt, 0.016);
+  apple.pulse += dt * 5;
+
+  if (moveTimer >= moveInterval) {
+    moveTimer -= moveInterval;
+
+    // Process buffered inputs
+    while (inputQueue.length > 0) {
+      const candidate = inputQueue.shift();
+      // Disallow reversing directly into oneself
+      if (candidate.x !== -dir.x || candidate.y !== -dir.y) {
+        if (candidate.x !== dir.x || candidate.y !== dir.y) {
+          playSound('turn');
+        }
+        nextDir = candidate;
+        break;
+      }
+    }
+    dir = nextDir;
+
+    // New head position in grid coordinates
+    const head = snake[0];
+    const newHead = {
+      gridX: head.gridX + dir.x,
+      gridY: head.gridY + dir.y,
+      x: PLAY_MIN_X + (head.gridX + dir.x) * CELL_SIZE,
+      y: PLAY_MIN_Y + (head.gridY + dir.y) * CELL_SIZE
+    };
+
+    // Check Wall Collision
+    if (newHead.gridX < 0 || newHead.gridX >= GRID_COLS || newHead.gridY < 0 || newHead.gridY >= GRID_ROWS) {
+      status = 'lost';
+      playSound('die');
+      spawnSparks(head.x, head.y, '#ff0055', 25);
+      return;
+    }
+
+    // Check Self Collision
+    for (let i = 0; i < snake.length - 1; i++) {
+      if (snake[i].gridX === newHead.gridX && snake[i].gridY === newHead.gridY) {
+        status = 'lost';
+        playSound('die');
+        spawnSparks(head.x, head.y, '#ff0055', 25);
+        return;
+      }
+    }
+
+    // Move snake
+    snake.unshift(newHead);
+
+    // Check Apple Collision
+    if (newHead.gridX === apple.gridX && newHead.gridY === apple.gridY) {
+      score += 10;
+      if (score > highScore) highScore = score;
+      playSound('eat');
+      spawnSparks(apple.x, apple.y, '#00ffcc', 16);
+      
+      floatingTexts.push({
+        x: apple.x + 10,
+        y: apple.y - 5,
+        text: '+10',
+        alpha: 1.0
+      });
+
+      // Increase speed slightly
+      moveInterval = Math.max(0.055, 0.11 - Math.floor(score / 40) * 0.006);
+
+      spawnApple();
+    } else {
+      // Remove tail segment if not eating
+      snake.pop();
+    }
+  }
+
+  // Update particle effects
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.life -= dt;
+    if (p.life <= 0) {
+      particles.splice(i, 1);
+    }
+  }
+
+  // Update floating score texts
+  for (let i = floatingTexts.length - 1; i >= 0; i--) {
+    const ft = floatingTexts[i];
+    ft.y -= 30 * dt;
+    ft.alpha -= dt * 1.5;
+    if (ft.alpha <= 0) {
+      floatingTexts.splice(i, 1);
+    }
+  }
+}
+
+// --- RENDER FUNCTION ---
+function render() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Background Grid Lines
+  ctx.strokeStyle = '#0e172a';
+  ctx.lineWidth = 1;
+  for (let c = 0; c <= GRID_COLS; c++) {
+    const x = PLAY_MIN_X + c * CELL_SIZE;
+    ctx.beginPath();
+    ctx.moveTo(x, PLAY_MIN_Y);
+    ctx.lineTo(x, PLAY_MAX_Y);
+    ctx.stroke();
+  }
+  for (let r = 0; r <= GRID_ROWS; r++) {
+    const y = PLAY_MIN_Y + r * CELL_SIZE;
+    ctx.beginPath();
+    ctx.moveTo(PLAY_MIN_X, y);
+    ctx.lineTo(PLAY_MAX_X, y);
+    ctx.stroke();
+  }
+
+  // Render Wall Border
+  ctx.strokeStyle = '#ff007f';
+  ctx.lineWidth = 3;
+  ctx.shadowColor = '#ff007f';
+  ctx.shadowBlur = 12;
+  ctx.strokeRect(PLAY_MIN_X - 2, PLAY_MIN_Y - 2, GRID_COLS * CELL_SIZE + 4, GRID_ROWS * CELL_SIZE + 4);
+  ctx.shadowBlur = 0;
+
+  // Render Apple (Glowing Pulsing Orb)
+  const pulseScale = 1 + Math.sin(apple.pulse) * 0.12;
+  const appleRad = (CELL_SIZE / 2 - 2) * pulseScale;
+  const appleCenterX = apple.x + CELL_SIZE / 2;
+  const appleCenterY = apple.y + CELL_SIZE / 2;
+
+  ctx.save();
+  ctx.shadowColor = '#00ffcc';
+  ctx.shadowBlur = 16;
+  ctx.fillStyle = '#00ffcc';
+  ctx.beginPath();
+  ctx.arc(appleCenterX, appleCenterY, Math.max(2, appleRad), 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(appleCenterX - 3, appleCenterY - 3, Math.max(1, appleRad * 0.35), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // Render Snake
+  for (let i = snake.length - 1; i >= 0; i--) {
+    const seg = snake[i];
+    const isHead = (i === 0);
+    const progress = 1 - i / Math.max(snake.length, 1);
+    
+    // Head has intense cyan/white glow, body gradients to deep neon blue/purple
+    ctx.save();
+    if (isHead) {
+      ctx.shadowColor = status === 'lost' ? '#ff0055' : '#00ffff';
+      ctx.shadowBlur = 18;
+      ctx.fillStyle = status === 'lost' ? '#ff2a70' : '#ffffff';
+    } else {
+      ctx.shadowColor = '#0066ff';
+      ctx.shadowBlur = 6;
+      // Gradient from bright cyan-blue to purple
+      const g = Math.floor(180 * progress + 40);
+      const b = 255;
+      const r = Math.floor(160 * (1 - progress));
+      ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+    }
+
+    const padding = 1.5;
+    const segSize = CELL_SIZE - padding * 2;
+    ctx.beginPath();
+    ctx.roundRect(seg.x + padding, seg.y + padding, segSize, segSize, isHead ? 6 : 4);
+    ctx.fill();
+
+    // Render Eyes on Head
+    if (isHead) {
+      ctx.fillStyle = '#060714';
+      let eye1 = { x: 0, y: 0 }, eye2 = { x: 0, y: 0 };
+      const eyeOffset = 6;
+      const eyeForward = 16;
+      const eyeSize = 2.5;
+
+      if (dir.x === 1) {
+        eye1 = { x: seg.x + eyeForward, y: seg.y + eyeOffset };
+        eye2 = { x: seg.x + eyeForward, y: seg.y + CELL_SIZE - eyeOffset };
+      } else if (dir.x === -1) {
+        eye1 = { x: seg.x + (CELL_SIZE - eyeForward), y: seg.y + eyeOffset };
+        eye2 = { x: seg.x + (CELL_SIZE - eyeForward), y: seg.y + CELL_SIZE - eyeOffset };
+      } else if (dir.y === 1) {
+        eye1 = { x: seg.x + eyeOffset, y: seg.y + eyeForward };
+        eye2 = { x: seg.x + CELL_SIZE - eyeOffset, y: seg.y + eyeForward };
+      } else if (dir.y === -1) {
+        eye1 = { x: seg.x + eyeOffset, y: seg.y + (CELL_SIZE - eyeForward) };
+        eye2 = { x: seg.x + CELL_SIZE - eyeOffset, y: seg.y + (CELL_SIZE - eyeForward) };
+      }
+
+      ctx.beginPath();
+      ctx.arc(eye1.x, eye1.y, eyeSize, 0, Math.PI * 2);
+      ctx.arc(eye2.x, eye2.y, eyeSize, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // Render Spark Particles
+  for (let p of particles) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
+    ctx.fillStyle = p.color;
+    ctx.shadowColor = p.color;
+    ctx.shadowBlur = 8;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Render Floating Texts
+  for (let ft of floatingTexts) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, ft.alpha);
+    ctx.font = 'bold 16px "Segoe UI", sans-serif';
+    ctx.fillStyle = '#00ffcc';
+    ctx.shadowColor = '#00ffcc';
+    ctx.shadowBlur = 8;
+    ctx.fillText(ft.text, ft.x, ft.y);
+    ctx.restore();
+  }
+
+  // --- TOP HUD BAR ---
+  ctx.save();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 18px "Segoe UI", Courier, monospace';
+  ctx.shadowColor = '#00e5ff';
+  ctx.shadowBlur = 8;
+  ctx.fillText(`NEON SERPENT`, PLAY_MIN_X, 32);
+
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#00ffcc';
+  ctx.fillText(`SCORE: ${score}`, PLAY_MAX_X - 160, 32);
+  
+  ctx.fillStyle = '#ffaa00';
+  ctx.shadowColor = '#ffaa00';
+  ctx.fillText(`BEST: ${highScore}`, PLAY_MAX_X, 32);
+  ctx.restore();
+
+  // --- GAME OVER OVERLAY ---
+  if (status === 'lost') {
+    ctx.save();
+    ctx.fillStyle = 'rgba(6, 7, 14, 0.78)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#ff0055';
+    ctx.shadowBlur = 25;
+    ctx.fillStyle = '#ff0055';
+    ctx.font = '900 48px "Segoe UI", Arial, sans-serif';
+    ctx.fillText('CRASH DETECTED', canvas.width / 2, canvas.height / 2 - 30);
+
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = '#00ffff';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 22px "Segoe UI", Arial, sans-serif';
+    ctx.fillText(`Final Score: ${score}`, canvas.width / 2, canvas.height / 2 + 15);
+
+    ctx.fillStyle = '#00ffcc';
+    ctx.font = '16px "Segoe UI", Arial, sans-serif';
+    ctx.fillText('Press "R" or [ENTER] to Restart', canvas.width / 2, canvas.height / 2 + 65);
+    ctx.restore();
+  }
+}
+
+// --- MAIN GAME LOOP WITH DELTA TIME ---
+let lastTime = performance.now();
+
+function gameLoop(now) {
+  const dt = Math.min((now - lastTime) / 1000, 0.1);
+  lastTime = now;
+
+  if (status === 'playing') {
+    update(dt);
+  }
+
+  render();
+
+  // Continuously expose state
+  const head = snake[0] || { x: 0, y: 0 };
+  window.__gameState = {
+    player: {
+      x: head.x,
+      y: head.y,
+      width: CELL_SIZE,
+      height: CELL_SIZE,
+      health: status === 'lost' ? 0 : 100,
+      speed: 1 / moveInterval
+    },
+    score: score,
+    status: status,
+    entities: [
+      { x: apple.x, y: apple.y, width: CELL_SIZE, height: CELL_SIZE, type: 'apple' },
+      ...snake.map((s, idx) => ({ x: s.x, y: s.y, width: CELL_SIZE, height: CELL_SIZE, type: idx === 0 ? 'head' : 'body' })),
+      ...walls.map(w => ({ x: w.x, y: w.y, width: w.width, height: w.height, type: 'wall' }))
+    ]
+  };
+
+  requestAnimationFrame(gameLoop);
+}
+
+// Boot up game
+requestAnimationFrame(gameLoop);
+</script>
+
+<script>
+(function () {
+  if (window.__gaBridge) return;
+  window.__gaBridge = true;
+  window.__pressed = window.__pressed || {};
+  function setKey(e, on) {
+    if (!e) return;
+    window.__pressed[e.key] = on;
+    window.__pressed[e.code] = on;
+    if (e.key) window.__pressed[e.key.toLowerCase()] = on;
+  }
+  window.addEventListener('keydown', function (e) {
+    setKey(e, true);
+    if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+  }, true);
+  window.addEventListener('keyup', function (e) { setKey(e, false); }, true);
+  window.addEventListener('message', function (ev) {
+    var d = ev.data || {};
+    if (d.type !== 'KEY_EVENT') return;
+    var fake = { key: d.key, code: d.code, keyCode: d.keyCode };
+    setKey(fake, d.eventType !== 'keyup');
+    try {
+      var ke = new KeyboardEvent(d.eventType || 'keydown', {
+        key: d.key, code: d.code, bubbles: true, cancelable: true
+      });
+      window.dispatchEvent(ke);
+      document.dispatchEvent(ke);
+    } catch (err) {}
+  });
+  var canvas = document.querySelector('canvas');
+  if (canvas) {
+    canvas.setAttribute('tabindex', '0');
+    canvas.addEventListener('click', function () { canvas.focus(); });
+  }
+})();
+</script>
+</body>
+</html>
+</html>

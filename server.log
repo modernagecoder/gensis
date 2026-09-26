@@ -1,0 +1,14 @@
+
+🎮 Game Architect Server running on http://localhost:3101
+   GEMINI_API_KEY: ✓ configured
+   MODEL: gemini-3.8-flash (Gemini only)
+   ARENA: gemini-3.8-flash vs gemini-3.7-flash
+   Games dir: C:\Users\hp\Desktop\gensis\server\games
+   Screenshots dir: C:\Users\hp\Desktop\gensis\server\screenshots
+
+[callLLM] Routing to Google Gemini API (model: gemini-3.8-flash)...
+[Gemini] ✓ gemini-3.5-flash-lite 1676ms finish=STOP out=213 thoughts=0
+[callLLM] ✓ Google Gemini responded successfully (710 chars)
+[callLLM] Routing to Google Gemini API (model: gemini-3.8-flash)...
+[Gemini] ✓ gemini-3.5-flash-lite 5917ms finish=STOP out=2249 thoughts=0
+[callLLM] ✓ Google Gemini responded successfully (5753 chars)

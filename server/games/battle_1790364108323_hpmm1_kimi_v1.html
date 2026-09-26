@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Neon Brick Breaker</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background: #0f0f1a;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      color: #fff;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      overflow: hidden;
+    }
+    canvas {
+      border: 4px solid #3f3f74;
+      box-shadow: 0 0 30px rgba(100, 100, 255, 0.3);
+      background: #121222;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="gameCanvas" width="800" height="600"></canvas>
+
+<script>
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  canvas.setAttribute('tabindex', '1');
+  canvas.addEventListener('click', () => canvas.focus());
+  canvas.focus();
+
+  const keys = {};
+  window.addEventListener('keydown', e => {
+    keys[e.key] = true;
+    if ((e.key === 'r' || e.key === 'R' || e.key === 'Enter') && (window.__gameState.status === 'lost' || window.__gameState.status === 'won')) {
+      resetGame();
+    }
+  });
+  window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+  let score = 0;
+  let status = 'playing'; // 'playing' | 'won' | 'lost'
+
+  const player = {
+    x: 350,
+    y: 550,
+    width: 100,
+    height: 14,
+    speed: 500,
+    health: 3,
+    color: '#00f0ff'
+  };
+
+  const ball = {
+    x: 400,
+    y: 530,
+    radius: 8,
+    vx: 200,
+    vy: -250,
+    color: '#ff007f'
+  };
+
+  let bricks = [];
+  const colors = ['#ff0055', '#ff9900', '#ffff00', '#00ff66', '#00ccff'];
+
+  function initBricks() {
+    bricks = [];
+    const rows = 5;
+    const cols = 10;
+    const padding = 10;
+    const width = 68;
+    const height = 24;
+    const offsetTop = 60;
+    const offsetLeft = 46;
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        bricks.push({
+          x: offsetLeft + c * (width + padding),
+          y: offsetTop + r * (height + padding),
+          width: width,
+          height: height,
+          color: colors[r],
+          alive: true,
+          points: (rows - r) * 10
+        });
+      }
+    }
+  }
+
+  function resetGame() {
+    score = 0;
+    status = 'playing';
+    player.health = 3;
+    player.x = 350;
+    ball.x = 400;
+    ball.y = 530;
+    ball.vx = 200 * (Math.random() > 0.5 ? 1 : -1);
+    ball.vy = -250;
+    initBricks();
+  }
+
+  initBricks();
+
+  // Expose global game state per requirements
+  window.__gameState = {
+    player: { x: player.x, y: player.y, width: player.width, height: player.height, health: player.health, speed: player.speed },
+    score: score,
+    status: status,
+    entities: [player, ball, ...bricks]
+  };
+
+  function update(dt) {
+    // Input handling
+    if (keys['ArrowLeft'] || keys['a'] || keys['A']) {
+      player.x -= player.speed * dt;
+    }
+    if (keys['ArrowRight'] || keys['d'] || keys['D']) {
+      player.x += player.speed * dt;
+    }
+
+    // Strict boundary clamping
+    player.x = Math.max(0, Math.min(canvas.width - player.width, player.x));
+
+    if (status === 'playing') {
+      // Ball movement
+      ball.x += ball.vx * dt;
+      ball.y += ball.vy * dt;
+
+      // Wall collisions
+      if (ball.x - ball.radius < 0) {
+        ball.x = ball.radius;
+        ball.vx *= -1;
+      }
+      if (ball.x + ball.radius > canvas.width) {
+        ball.x = canvas.width - ball.radius;
+        ball.vx *= -1;
+      }
+      if (ball.y - ball.radius < 0) {
+        ball.y = ball.radius;
+        ball.vy *= -1;
+      }
+
+      // Paddle collision
+      if (
+        ball.y + ball.radius >= player.y &&
+        ball.y - ball.radius <= player.y + player.height &&
+        ball.x >= player.x &&
+        ball.x <= player.x + player.width
+      ) {
+        ball.y = player.y - ball.radius;
+        const hitPoint = (ball.x - (player.x + player.width / 2)) / (player.width / 2);
+        const angle = hitPoint * (Math.PI / 3); // Max 60 deg
+        const speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
+        ball.vx = speed * Math.sin(angle);
+        ball.vy = -speed * Math.cos(angle);
+      }
+
+      // Bottom boundary (Lose Life)
+      if (ball.y - ball.radius > canvas.height) {
+        player.health--;
+        if (player.health <= 0) {
+          status = 'lost';
+        } else {
+          ball.x = player.x + player.width / 2;
+          ball.y = player.y - 20;
+          ball.vx = 200 * (Math.random() > 0.5 ? 1 : -1);
+          ball.vy = -250;
+        }
+      }
+
+      // Brick collisions
+      let allCleared = true;
+      for (let i = 0; i < bricks.length; i++) {
+        const b = bricks[i];
+        if (!b.alive) continue;
+        allCleared = false;
+
+        // AABB check for ball vs brick
+        if (
+          ball.x + ball.radius > b.x &&
+          ball.x - ball.radius < b.x + b.width &&
+          ball.y + ball.radius > b.y &&
+          ball.y - ball.radius < b.y + b.height
+        ) {
+          b.alive = false;
+          score += b.points;
+          ball.vy *= -1;
+          break;
+        }
+      }
+
+      if (allCleared) {
+        status = 'won';
+      }
+    }
+
+    // Update global state object references
+    window.__gameState.player.x = player.x;
+    window.__gameState.player.y = player.y;
+    window.__gameState.player.health = player.health;
+    window.__gameState.score = score;
+    window.__gameState.status = status;
+    window.__gameState.entities = [player, ball, ...bricks.filter(b => b.alive)];
+  }
+
+  function render() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Draw Bricks
+    for (let i = 0; i < bricks.length; i++) {
+      const b = bricks[i];
+      if (!b.alive) continue;
+      ctx.fillStyle = b.color;
+      ctx.shadowColor = b.color;
+      ctx.shadowBlur = 10;
+      ctx.fillRect(b.x, b.y, b.width, b.height);
+    }
+    ctx.shadowBlur = 0;
+
+    // Draw Paddle
+    ctx.fillStyle = player.color;
+    ctx.shadowColor = player.color;
+    ctx.shadowBlur = 15;
+    ctx.fillRect(player.x, player.y, player.width, player.height);
+
+    // Draw Ball
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+    ctx.fillStyle = ball.color;
+    ctx.shadowColor = ball.color;
+    ctx.shadowBlur = 15;
+    ctx.fill();
+    ctx.closePath();
+    ctx.shadowBlur = 0;
+
+    // Draw UI (Score & Lives)
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '20pxSegoe UI, sans-serif';
+    ctx.fillText(`Score: ${score}`, 20, 35);
+    ctx.fillText(`Lives: ${player.health}`, canvas.width - 100, 35);
+
+    // Overlays
+    if (status === 'lost') {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#ff0055';
+      ctx.font = 'bold 48pxSegoe UI, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 20);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '20pxSegoe UI, sans-serif';
+      ctx.fillText('Press R or Enter to Restart', canvas.width / 2, canvas.height / 2 + 30);
+      ctx.textAlign = 'left';
+    } else if (status === 'won') {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#00ff66';
+      ctx.font = 'bold 48pxSegoe UI, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('YOU WIN!', canvas.width / 2, canvas.height / 2 - 20);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '20pxSegoe UI, sans-serif';
+      ctx.fillText('Press R or Enter to Play Again', canvas.width / 2, canvas.height / 2 + 30);
+      ctx.textAlign = 'left';
+    }
+  }
+
+  let lastTime = performance.now();
+  function gameLoop(now) {
+    const dt = Math.min((now - lastTime) / 1000, 0.1);
+    lastTime = now;
+
+    update(dt);
+    render();
+
+    requestAnimationFrame(gameLoop);
+  }
+  requestAnimationFrame(gameLoop);
+</script>
+
+</body>
+</html>
+</html>

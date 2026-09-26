@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cyber Samurai Slash</title>
+<style>
+    body{margin:0;background:#111;color:#fff;font-family:Arial,Helvetica,sans-serif}
+    canvas{display:block;margin:auto;background:#222}
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<script>
+/* ---------- Canvas setup ---------- */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+canvas.width = 800;
+canvas.height = 600;
+
+/* ---------- Input handling ---------- */
+const keys = {};
+window.addEventListener('keydown', e => keys[e.key] = true);
+window.addEventListener('keyup',   e => keys[e.key] = false);
+canvas.addEventListener('click', () => window.focus());
+
+/* ---------- Game state ---------- */
+let lastTime = performance.now();
+let status = 'playing';
+let score = 0;
+let combo = 0;
+let spawnTimer = 0;
+let fireCooldown = 0;
+
+const player = {
+    x: 380, y: 520,
+    width: 40, height: 40,
+    health: 100,
+    speed: 200,
+    dashTime: 0,
+    baseSpeed: 200
+};
+
+const drones = [];
+const shurikens = [];
+const bullets = [];
+
+/* expose state for automated tests */
+window.__gameState = { player, drones, shurikens, bullets, get status(){return status;}, get score(){return score;}, get combo(){return combo;} };
+
+/* ---------- Utility ---------- */
+function rect(a, b) {
+    return a.x < b.x + b.width &&
+           a.x + a.width > b.x &&
+           a.y < b.y + b.height &&
+           a.y + a.height > b.y;
+}
+
+/* ---------- Update ---------- */
+function update(dt) {
+    if (status !== 'playing') return;
+
+    // dash timer
+    player.dashTime = Math.max(0, player.dashTime - dt);
+    if (player.dashTime === 0) player.speed = player.baseSpeed;
+
+    // movement
+    if (keys.ArrowUp)    player.y -= player.speed * dt;
+    if (keys.ArrowDown)  player.y += player.speed * dt;
+    if (keys.ArrowLeft)  player.x -= player.speed * dt;
+    if (keys.ArrowRight) player.x += player.speed * dt;
+
+    // dash (Shift)
+    if (keys.Shift && player.dashTime === 0) {
+        player.dashTime = 0.3;
+        player.speed = 400;
+    }
+
+    // fire (Space)
+    if (keys.Space && fireCooldown <= 0) {
+        fireCooldown = 0.18;
+        bullets.push({
+            x: player.x + player.width / 2 - 3,
+            y: player.y - 12,
+            width: 6,
+            height: 12,
+            vy: -400,
+            color: '#D8125B'
+        });
+    }
+    fireCooldown = Math.max(0, fireCooldown - dt);
+
+    // keep player inside canvas
+    player.x = Math.max(0, Math.min(canvas.width - player.width, player.x));
+    player.y = Math.max(0, Math.min(canvas.height - player.height, player.y));
+
+    // spawn drones
+    spawnTimer += dt;
+    if (spawnTimer > 0.8) {
+        spawnTimer = 0;
+        if (drones.length < 20) {
+            drones.push({
+                x: Math.random() * (canvas.width - 30),
+                y: -30,
+                width: 30,
+                height: 30,
+                vy: 80 + Math.random() * 40,
+                color: '#0F0'
+            });
+        }
+    }
+
+    // update drones
+    for (let i = drones.length - 1; i >= 0; i--) {
+        const d = drones[i];
+        d.y += d.vy * dt;
+
+        if (rect(player, d)) {
+            player.health -= 20;
+            drones.splice(i, 1);
+            combo = 0;
+            if (player.health <= 0) status = 'lost';
+        } else if (d.y > canvas.height + 50) {
+            drones.splice(i, 1);
+        }
+    }
+
+    // update shurikens (placeholder logic – none are spawned yet)
+    for (let i = shurikens.length - 1; i >= 0; i--) {
+        const s = shurikens[i];
+        s.y += s.vy * dt;
+        if (rect(player, s)) {
+            status = 'lost';
+            shurikens.splice(i, 1);
+        } else if (s.y > canvas.height + 50) {
+            shurikens.splice(i, 1);
+        }
+    }
+
+    // update bullets
+    for (let i = bullets.length - 1; i >= 0; i--) {
+        const b = bullets[i];
+        b.y += b.vy * dt;
+
+        if (b.y < -20) {
+            bullets.splice(i, 1);
+            continue;
+        }
+
+        // bullet vs drone collision
+        for (let j = drones.length - 1; j >= 0; j--) {
+            const d = drones[j];
+            if (rect(b, d)) {
+                bullets.splice(i, 1);
+                drones.splice(j, 1);
+                score += 100 * (combo + 1);
+                combo++;
+                break;
+            }
+        }
+    }
+
+    // combo bonus
+    if (combo > 0 && combo % 5 === 0) score += 200;
+
+    // win condition
+    if (score >= 10000 && drones.length === 0) status = 'won';
+}
+
+/* ---------- Render ---------- */
+function render() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // player
+    ctx.fillStyle = '#FFF';
+    ctx.fillRect(player.x, player.y, player.width, player.height);
+
+    // drones
+    drones.forEach(d => {
+        ctx.fillStyle = d.color;
+        ctx.fillRect(d.x, d.y, d.width, d.height);
+    });
+
+    // shurikens
+    shurikens.forEach(s => {
+        ctx.fillStyle = s.color;
+        ctx.fillRect(s.x

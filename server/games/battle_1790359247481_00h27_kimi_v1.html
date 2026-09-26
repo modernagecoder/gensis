@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Cyber Samurai Slash</title></head><body style="margin:0"><canvas id="gameCanvas"></canvas><script>
+const canvas=document.getElementById('gameCanvas');const ctx=canvas.getContext('2d');
+canvas.width=800;canvas.height=600;
+const keys={};
+window.addEventListener('keydown',e=>keys[e.key]=true);
+window.addEventListener('keyup',e=>keys[e.key]=false);
+canvas.addEventListener('click',()=>window.focus());
+let lastTime=performance.now(),score=0,combo=0,wave=1,status='playing';
+const player={x:400,y:500,width:32,height:32,health:100,speed:200,dashTime:0};
+const drones=[],shurikens=[],powerups=[];
+let spawnTimer=0,fireCooldown=0;
+function checkAABB(a,b){return a.x<b.x+a.width&&a.x+a.width>b.x&&a.y<b.y+a.height&&a.y+a.height>b.y;}
+function update(dt){
+if(status!=='playing')return;
+player.dashTime=Math.max(0,player.dashTime-dt);
+if(keys['ArrowUp'])player.y-=player.speed*dt;
+if(keys['ArrowDown'])player.y+=player.speed*dt;
+if(keys['ArrowLeft'])player.x-=player.speed*dt;
+if(keys['ArrowRight'])player.x+=player.speed*dt;
+if(keys['Shift']){player.dashTime=0.2;player.speed=400;}
+else player.speed=200;
+if(keys[' ']){fireCooldown=0;}
+fireCooldown=Math.max(0,fireCooldown-dt);
+if(keys[' ']){fireBullet();}
+spawnTimer+=dt;
+if(spawnTimer>1){spawnTimer=0;spawnWave();}
+for(let i=drones.length-1;i>=0;i--){const d=drones[i];d.y+=d.vy*dt;d.x+=d.vx*dt;
+if(checkAABB(player,d)){player.health-=20;drones.splice(i,1);if(player.health<=0)status='lost';}
+else if(d.y>canvas.height+50||d.x<-50||d.x>canvas.width+50)drones.splice(i,1);
+}
+for(let i=shurikens.length-1;i>=0;i--){const s=shurikens[i];s.y+=s.vy*dt;
+if(checkAABB(player,s)){player.health=0;shurikens.splice(i,1);status='lost';}
+else if(s.y>canvas.height+50)shurikens.splice(i,1);
+}
+for(let i=powerups.length-1;i>=0;i--){const p=powerups[i];p.y+=p.vy*dt;
+if(checkAABB(player,p)){score+=500;powerups.splice(i,1);}
+else if(p.y>canvas.height+50)powerups.splice(i,1);
+}
+if(wave>5&&score>=10000)status='won';
+player.x=Math.max(0,Math.min(canvas.width-player.width,player.x));
+player.y=Math.max(0,Math.min(canvas.height-player.height,player.y));
+}
+function render(){ctx.clearRect(0,0,canvas.width,canvas.height);
+ctx.fillStyle='#222';ctx.fillRect(0,0,canvas.width,canvas.height);
+ctx.fillStyle='#0f0';ctx.fillRect(player.x,player.y,player.width,player.height);
+drones.forEach(d=>{ctx.fillStyle=d.color;ctx.fillRect(d.x,d.y,d.width,d.height);});
+shurikens.forEach(s=>{ctx.fillStyle=s.color;ctx.fillRect(s.x,s.y,s.width,s.height);});
+powerups.forEach(p=>{ctx.fillStyle=p.color;ctx.fillRect(p.x,p.y,p.width,p.height);});
+ctx.fillStyle='#fff';ctx.font='16px sans-serif';ctx.fillText('Health:'+player.health,10,20);
+ctx.fillText('Score:'+score,10,40);ctx.fillText('Wave:'+wave,10,60);
+if(status!=='playing'){ctx.fillStyle='rgba(0,0,0,0.7)';ctx.fillRect(0,0,canvas.width,canvas.height);
+ctx.fillStyle='#fff';ctx.font='30px sans-serif';ctx.textAlign='center';
+ctx.fillText(status==='won'?'YOU WON!':'GAME OVER',canvas.width/2,canvas.height/2);
+ctx.font='20px sans-serif';ctx.fillText('Click to restart',canvas.width/2,canvas.height/2+40);}
+}
+function fireBullet(){if(fireCooldown>0)return;fireCooldown=0.18;
+bullets.push({x:player.x+player.width/2-3,y:player.y-12,width:6,height:12,vx:0,vy:-400,color:'#ff0'});}
+const bullets=[];
+function spawnWave(){for(let i=0;i<5;i++){drones.push({x:Math.random()*canvas.width,y:-40,width:32,height:32,vx:0,vy:80+Math.random()*40,color:'#f00'});}
+for(let i=0;i<3;i++){shurikens.push({x:Math.random()*canvas.width,y:-30,width:20,height:20,vx:0,vy:120+Math.random()*60,color:'#0ff'});}
+if(Math.random()<0.3){powerups.push({x:Math.random()*canvas.width,y:-20,width:20,height:20,vx:0,vy:60,color:'#0f0'});}
+wave++;if(wave>5)wave=5;}
+function gameLoop(now){const dt=Math.min((now-lastTime)/1000,0.1);lastTime=now;update(dt);render();requestAnimationFrame(gameLoop);}
+window.__gameState={player:{x:player.x,y:player.y,width:player.width,height:player.height,health:player.health,speed:player.speed},score:score,status:status,entities:{drones,shurikens,bullets,powerups}};
+requestAnimationFrame(gameLoop);
+canvas.addEventListener('click',()=>{if(status!=='playing'){player.health=100;score=0;wave=1;status='playing';drones.length=0;shurikens.length=0;bullets.length=0;powerups.length=0;}})
+</script></body></html>
